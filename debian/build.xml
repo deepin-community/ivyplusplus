@@ -8,6 +8,7 @@
       <include name="bcprov.jar" />
       <include name="com.zwitserloot.cmdreader.jar" />
       <include name="eclipse-jdt-core.jar" />
+      <include name="eclipse-jdt-compiler-apt.jar" />
       <include name="ivy.jar" />
       <include name="lombok.jar" />
     </fileset>
