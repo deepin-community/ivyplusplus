@@ -27,11 +27,14 @@ import java.io.File;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.apache.tools.ant.BuildException;
 import org.apache.tools.ant.DynamicAttribute;
+import org.apache.tools.ant.Project;
 import org.apache.tools.ant.RuntimeConfigurable;
 import org.apache.tools.ant.UnknownElement;
 import org.apache.tools.ant.taskdefs.Copy;
@@ -52,7 +55,7 @@ public class Compile extends MatchingTask implements DynamicAttribute {
 	private boolean ecj;
 	private boolean includeSystemBootclasspath;
 	private String copyExcludes;
-	private boolean destdirSet;
+	private String destdirLoc;
 	
 	public void setIncludeSystemBootclasspath(boolean includeSystemBootclasspath) {
 		this.includeSystemBootclasspath = includeSystemBootclasspath;
@@ -162,7 +165,7 @@ public class Compile extends MatchingTask implements DynamicAttribute {
 		matched |= setWithKey(javac, JAVAC_ATTR_MAP, name, value);
 		matched |= setWithKey(copy, COPY_ATTR_MAP, name, value);
 		if (!matched) throw new BuildException("Unknown property of compile task: " + name, getLocation());
-		if ("destdir".equals(name)) destdirSet = true;
+		if ("destdir".equals(name)) destdirLoc = value;
 	}
 	
 	public void setSrcdir(Path srcDir) {
@@ -200,6 +203,7 @@ public class Compile extends MatchingTask implements DynamicAttribute {
 	}
 	
 	private List<ImplementationSpecificArgument> compilerArgs = new ArrayList<ImplementationSpecificArgument>();
+	private List<AnnotationProcessorEntry> annotationProcessorEntries = new ArrayList<AnnotationProcessorEntry>();
 	
 	public ImplementationSpecificArgument createCompilerArg() {
 		ImplementationSpecificArgument arg = new ImplementationSpecificArgument();
@@ -207,12 +211,22 @@ public class Compile extends MatchingTask implements DynamicAttribute {
 		return arg;
 	}
 	
+	public AnnotationProcessorEntry createAnnotationProcessor() {
+		AnnotationProcessorEntry entry = new AnnotationProcessorEntry();
+		annotationProcessorEntries.add(entry);
+		return entry;
+	}
+	
 	public void execute() {
-		if (!destdirSet) throw new BuildException("mandatory property 'destdir' not set.");
+		if (destdirLoc == null) throw new BuildException("mandatory property 'destdir' not set.");
+		log(getLocation().toString() + "compiling to " + destdirLoc, Project.MSG_VERBOSE);
 		if (src == null) src = new Path(getProject());
 		Map<?, ?> attributeMap = javac.getWrapper().getAttributeMap();
+		boolean hasRelease = attributeMap.containsKey("release");
 		for (Map.Entry<String, String> e : JAVAC_DEFAULTS.entrySet()) {
-			if (!attributeMap.containsKey(e.getKey())) javac.getWrapper().setAttribute(e.getKey(), e.getValue());
+			if (!(hasRelease && (e.getKey().equals("source") || e.getKey().equals("target"))) && !attributeMap.containsKey(e.getKey())) {
+				javac.getWrapper().setAttribute(e.getKey(), e.getValue());
+			}
 		}
 		attributeMap = copy.getWrapper().getAttributeMap();
 		for (Map.Entry<String, String> e : COPY_DEFAULTS.entrySet()) {
@@ -231,7 +245,15 @@ public class Compile extends MatchingTask implements DynamicAttribute {
 		if (compileClasspath != null) javacTask.setClasspath(compileClasspath);
 		if (compileSourcepath != null) javacTask.setSourcepath(compileSourcepath);
 		if (extdirs != null) javacTask.setExtdirs(extdirs);
+		
+		Set<String> procClasses = new LinkedHashSet<String>();
+		Set<File> procJars = new LinkedHashSet<File>();
 		try {
+			for (AnnotationProcessorEntry entry : annotationProcessorEntries) {
+				procClasses.add(entry.getProcessor());
+				procJars.add(entry.getJar());
+			}
+			
 			Field f = MatchingTask.class.getDeclaredField("fileset");
 			f.setAccessible(true);
 			f.set(javacTask, getImplicitFileSet().clone());
@@ -239,11 +261,40 @@ public class Compile extends MatchingTask implements DynamicAttribute {
 			f.setAccessible(true);
 			FacadeTaskHelper facade = (FacadeTaskHelper) f.get(javacTask);
 			for (ImplementationSpecificArgument isa : compilerArgs) facade.addImplementationArgument(isa);
+			if (!procJars.isEmpty()) {
+				ImplementationSpecificArgument arg = new ImplementationSpecificArgument();
+				arg.setValue("-processorpath");
+				facade.addImplementationArgument(arg);
+				StringBuilder sb = new StringBuilder();
+				for (File procJar : procJars) {
+					if (sb.length() > 0) sb.append(File.pathSeparator);
+					sb.append(procJar.getAbsolutePath());
+				}
+				arg = new ImplementationSpecificArgument();
+				arg.setValue(sb.toString());
+				facade.addImplementationArgument(arg);
+			}
+			if (!procClasses.isEmpty()) {
+				ImplementationSpecificArgument arg = new ImplementationSpecificArgument();
+				arg.setValue("-processor");
+				facade.addImplementationArgument(arg);
+				StringBuilder sb = new StringBuilder();
+				for (String procClass : procClasses) {
+					if (sb.length() > 0) sb.append(",");
+					sb.append(procClass);
+				}
+				arg = new ImplementationSpecificArgument();
+				arg.setValue(sb.toString());
+				facade.addImplementationArgument(arg);
+				
+			}
 		} catch (Exception e) {
 			throw new BuildException(e, getLocation());
 		}
 		if (ecj) {
+			if (!compilerArgs.isEmpty()) throw new BuildException("compilerArg is not supported for ecj=\"true\"");
 			EcjAdapter ecjAdapter = new EcjAdapter();
+			ecjAdapter.setAnnotationProcessorEntries(procClasses, procJars);
 			if (includeSystemBootclasspath) ecjAdapter.setIncludeSystemBootclasspath(true);
 			javacTask.add(ecjAdapter);
 		} else {

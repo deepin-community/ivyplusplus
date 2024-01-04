@@ -1,5 +1,5 @@
 /**
- * Copyright © 2010-2019 Reinier Zwitserloot.
+ * Copyright © 2010-2020 Reinier Zwitserloot.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -59,6 +59,7 @@ public class BuildEclipseProject extends IvyPostResolveTask {
 	private List<Export> exports = new ArrayList<Export>();
 	private List<Lib> libs = new ArrayList<Lib>();
 	private String source = "1.8";
+	private String srcout = "bin";
 	private Settings settings;
 	private boolean pde = false;
 	
@@ -68,6 +69,10 @@ public class BuildEclipseProject extends IvyPostResolveTask {
 	
 	public void setProjectname(String projectname) {
 		this.projectname = projectname;
+	}
+	
+	public void setSrcout(String srcout) {
+		this.srcout = srcout;
 	}
 	
 	public void setSource(String source) {
@@ -311,6 +316,10 @@ public class BuildEclipseProject extends IvyPostResolveTask {
 	private static final Map<String, String> SOURCE_TO_CON;
 	static {
 		Map<String, String> map = new LinkedHashMap<String, String>();
+		map.put("17", "JavaSE-17");
+		map.put("16", "JavaSE-16");
+		map.put("15", "JavaSE-15");
+		map.put("14", "JavaSE-14");
 		map.put("13", "JavaSE-13");
 		map.put("12", "JavaSE-12");
 		map.put("11", "JavaSE-11");
@@ -340,9 +349,10 @@ public class BuildEclipseProject extends IvyPostResolveTask {
 	}
 	
 	private String readProjName(File in, boolean error) throws IOException {
-		FileInputStream fis = new FileInputStream(in);
-		try {
+		try (
+			FileInputStream fis = new FileInputStream(in);
 			BufferedReader br = new BufferedReader(new InputStreamReader(fis, "UTF-8"));
+		) {
 			List<String> stack = new ArrayList<String>();
 			while (true) {
 				String line = br.readLine();
@@ -376,8 +386,6 @@ public class BuildEclipseProject extends IvyPostResolveTask {
 				
 				return warnAboutEclipseProjectReadFailure(error, in);
 			}
-		} finally {
-			fis.close();
 		}
 	}
 	
@@ -423,7 +431,13 @@ public class BuildEclipseProject extends IvyPostResolveTask {
 		
 		for (Srcdir dir : srcdirs) {
 			String path = todir.toURI().relativize(dir.getDir().toURI()).toString();
-			elements.append("\t<classpathentry kind=\"src\" path=\"").append(path).append("\"");
+			elements.append("\t<classpathentry kind=\"src\" ");
+			if (!dir.getSrcout().isEmpty()) {
+				elements.append("output=\"");
+				elements.append(dir.getSrcout());
+				elements.append("\" ");
+			}
+			elements.append("path=\"").append(path).append("\"");
 			if (dir.isOptional()) {
 				elements.append(">\n\t\t<attributes>\n\t\t\t<attribute name=\"optional\" value=\"true\"/>\n\t\t</attributes>\n\t</classpathentry>\n");
 			} else {
@@ -443,12 +457,12 @@ public class BuildEclipseProject extends IvyPostResolveTask {
 			elements.append("\t<classpathentry kind=\"src\" path=\"/").append(pd.getName()).append("\" combineaccessrules=\"false\"/>\n");
 		}
 		
-		ModuleDescriptor md = null;
-		if (getResolveId() != null) md = (ModuleDescriptor) getResolvedDescriptor(getResolveId());
-		else md = (ModuleDescriptor) getResolvedDescriptor(getOrganisation(), getModule(), false);
+		ModuleDescriptor md = getResolveId() != null ?
+			(ModuleDescriptor) getResolvedDescriptor(getResolveId()) :
+			(ModuleDescriptor) getResolvedDescriptor(getOrganisation(), getModule(), false);
 		
 		IvyNode[] deps = getIvyInstance().getResolveEngine().getDependencies(md, new ResolveOptions()
-				.setConfs(confsWithSources.toArray(new String[0])).setResolveId(getResolveId()).setValidate(doValidate(getSettings())), null);
+			.setConfs(confsWithSources.toArray(new String[0])).setResolveId(getResolveId()).setValidate(doValidate(getSettings())), null);
 		List<ArtifactRevisionId> handledArtifacts = new ArrayList<ArtifactRevisionId>();
 		for (IvyNode dep : deps) {
 			if (dep.isCompletelyEvicted()) continue;
@@ -494,7 +508,7 @@ public class BuildEclipseProject extends IvyPostResolveTask {
 		}
 		elements.append("\t<classpathentry kind=\"con\" path=\"org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/")
 		.append(SOURCE_TO_CON.get(source)).append("\"/>\n");
-		elements.append("\t<classpathentry kind=\"output\" path=\"bin\"/>\n");
+		elements.append("\t<classpathentry kind=\"output\" path=\"" + srcout + "\"/>\n");
 		elements.append("</classpath>\n");
 		try {
 			generateDotProject();
